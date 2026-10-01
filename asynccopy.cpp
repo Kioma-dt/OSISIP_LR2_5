@@ -44,24 +44,24 @@ struct AppError
 
 static std::wstring WinErrText(DWORD code)
 {
-    LPWSTR buf = nullptr;
-    DWORD n = FormatMessageW(
+    LPWSTR buffer = nullptr;
+    DWORD msgLength = FormatMessageW(
         FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
         nullptr, code, MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
-        reinterpret_cast<LPWSTR>(&buf), 0, nullptr);
-    std::wstring s;
-    if (n && buf)
+        reinterpret_cast<LPWSTR>(&buffer), 0, nullptr);
+    std::wstring errorMessage;
+    if (msgLength && buffer)
     {
-        s.assign(buf, n);
-        LocalFree(buf);
+        errorMessage.assign(buffer, msgLength);
+        LocalFree(buffer);
     }
     else
     {
-        s = L"(description unavailable)";
+        errorMessage = L"(description unavailable)";
     }
-    while (!s.empty() && (s.back() == L'\r' || s.back() == L'\n' || s.back() == L' '))
-        s.pop_back();
-    return s;
+    while (!errorMessage.empty() && (errorMessage.back() == L'\r' || errorMessage.back() == L'\n' || errorMessage.back() == L' '))
+        errorMessage.pop_back();
+    return errorMessage;
 }
 
 // Формирует исключение с названием операции, кодом GetLastError() и описанием.
@@ -185,44 +185,44 @@ static std::wstring Hex32(uint32_t v)
     return o.str();
 }
 
-static UniqueHandle OpenSource(const std::wstring &path, bool overlapped, bool nobuf)
+static UniqueHandle OpenSource(const std::wstring &path, bool isOverlapped, bool noBuffering)
 {
-    DWORD flags = FILE_ATTRIBUTE_NORMAL | (overlapped ? FILE_FLAG_OVERLAPPED : 0) | (nobuf ? FILE_FLAG_NO_BUFFERING : 0);
-    HANDLE h = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, flags, nullptr);
-    if (h == INVALID_HANDLE_VALUE)
+    DWORD flags = FILE_ATTRIBUTE_NORMAL | (isOverlapped ? FILE_FLAG_OVERLAPPED : 0) | (noBuffering ? FILE_FLAG_NO_BUFFERING : 0);
+    HANDLE handle = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, flags, nullptr);
+    if (handle == INVALID_HANDLE_VALUE)
         ThrowWin(L"CreateFileW (open source)", path);
-    return UniqueHandle(h);
+    return UniqueHandle(handle);
 }
 
-static UniqueHandle OpenDest(const std::wstring &path, bool overlapped, bool nobuf)
+static UniqueHandle OpenDest(const std::wstring &path, bool isOverlapped, bool noBuffering)
 {
-    DWORD flags = FILE_ATTRIBUTE_NORMAL | (overlapped ? FILE_FLAG_OVERLAPPED : 0) | (nobuf ? FILE_FLAG_NO_BUFFERING : 0);
-    HANDLE h = CreateFileW(path.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, flags, nullptr);
-    if (h == INVALID_HANDLE_VALUE)
+    DWORD flags = FILE_ATTRIBUTE_NORMAL | (isOverlapped ? FILE_FLAG_OVERLAPPED : 0) | (noBuffering ? FILE_FLAG_NO_BUFFERING : 0);
+    HANDLE handle = CreateFileW(path.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, flags, nullptr);
+    if (handle == INVALID_HANDLE_VALUE)
         ThrowWin(L"CreateFileW (create destination)", path);
-    return UniqueHandle(h);
+    return UniqueHandle(handle);
 }
 
 static ULONGLONG GetFileSizeByPath(const std::wstring &path)
 {
-    HANDLE h = CreateFileW(path.c_str(), FILE_READ_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+    HANDLE handle = CreateFileW(path.c_str(), FILE_READ_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
                            nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
-    if (h == INVALID_HANDLE_VALUE)
+    if (handle == INVALID_HANDLE_VALUE)
         ThrowWin(L"CreateFileW (size determination)", path);
-    UniqueHandle uh(h);
-    LARGE_INTEGER sz;
-    if (!GetFileSizeEx(uh.get(), &sz))
+    UniqueHandle uniqueHandle(handle);
+    LARGE_INTEGER fileSizeResult;
+    if (!GetFileSizeEx(uniqueHandle.get(), &fileSizeResult))
         ThrowWin(L"GetFileSizeEx", path);
-    return static_cast<ULONGLONG>(sz.QuadPart);
+    return static_cast<ULONGLONG>(fileSizeResult.QuadPart);
 }
 
 static void DeleteIfExists(const std::wstring &path)
 {
     if (!DeleteFileW(path.c_str()))
     {
-        DWORD e = GetLastError();
-        if (e != ERROR_FILE_NOT_FOUND && e != ERROR_PATH_NOT_FOUND)
-            ThrowWinCode(L"DeleteFileW", path, e);
+        DWORD errorCode = GetLastError();
+        if (errorCode != ERROR_FILE_NOT_FOUND && errorCode != ERROR_PATH_NOT_FOUND)
+            ThrowWinCode(L"DeleteFileW", path, errorCode);
     }
 }
 
@@ -230,15 +230,15 @@ static void DeleteIfExists(const std::wstring &path)
 // где последний блок записывается с добиванием до границы сектора).
 static void TruncateFile(const std::wstring &path, ULONGLONG size)
 {
-    HANDLE h = CreateFileW(path.c_str(), GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
-    if (h == INVALID_HANDLE_VALUE)
+    HANDLE handle = CreateFileW(path.c_str(), GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (handle == INVALID_HANDLE_VALUE)
         ThrowWin(L"CreateFileW (truncate file)", path);
-    UniqueHandle uh(h);
-    LARGE_INTEGER li;
-    li.QuadPart = static_cast<LONGLONG>(size);
-    if (!SetFilePointerEx(uh.get(), li, nullptr, FILE_BEGIN))
+    UniqueHandle uniqueHandle(handle);
+    LARGE_INTEGER largeIntOffset;
+    largeIntOffset.QuadPart = static_cast<LONGLONG>(size);
+    if (!SetFilePointerEx(uniqueHandle.get(), largeIntOffset, nullptr, FILE_BEGIN))
         ThrowWin(L"SetFilePointerEx (truncate)", path);
-    if (!SetEndOfFile(uh.get()))
+    if (!SetEndOfFile(uniqueHandle.get()))
         ThrowWin(L"SetEndOfFile (truncate)", path);
 }
 
@@ -291,23 +291,23 @@ static uint32_t Crc32Update(uint32_t crc, const uint8_t *p, size_t n)
 // Читает файл средствами WinAPI и возвращает CRC-32.
 static uint32_t Crc32File(const std::wstring &path, ULONGLONG &totalBytes)
 {
-    HANDLE h = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING,
+    HANDLE handle = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING,
                            FILE_ATTRIBUTE_NORMAL | FILE_FLAG_SEQUENTIAL_SCAN, nullptr);
-    if (h == INVALID_HANDLE_VALUE)
+    if (handle == INVALID_HANDLE_VALUE)
         ThrowWin(L"CreateFileW (calc CRC32)", path);
-    UniqueHandle uh(h);
-    std::vector<uint8_t> buf(1u << 20);
+    UniqueHandle uniqueHandle(handle);
+    std::vector<uint8_t> buffer(1u << 20);
     uint32_t crc = 0xFFFFFFFFu;
     totalBytes = 0;
     for (;;)
     {
-        DWORD got = 0;
-        if (!ReadFile(uh.get(), buf.data(), static_cast<DWORD>(buf.size()), &got, nullptr))
+        DWORD bytesRead = 0;
+        if (!ReadFile(uniqueHandle.get(), buffer.data(), static_cast<DWORD>(buffer.size()), &bytesRead, nullptr))
             ThrowWin(L"ReadFile (calc CRC32)", path);
-        if (got == 0)
+        if (bytesRead == 0)
             break;
-        crc = Crc32Update(crc, buf.data(), got);
-        totalBytes += got;
+        crc = Crc32Update(crc, buffer.data(), bytesRead);
+        totalBytes += bytesRead;
     }
     return crc ^ 0xFFFFFFFFu;
 }
@@ -318,35 +318,28 @@ static uint32_t Crc32File(const std::wstring &path, ULONGLONG &totalBytes)
 
 static void GenerateFile(const std::wstring &path, ULONGLONG bytes)
 {
-    HANDLE h = CreateFileW(path.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr);
-    if (h == INVALID_HANDLE_VALUE)
+    HANDLE handle = CreateFileW(path.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (handle == INVALID_HANDLE_VALUE)
         ThrowWin(L"CreateFileW (create test file)", path);
-    UniqueHandle uh(h);
+    UniqueHandle uniqueHandle(handle);
 
-    const DWORD chunk = 1u << 20;
-    std::vector<uint64_t> buf(chunk / 8);
+    const DWORD chunkSize = 1u << 20;
+    std::vector<uint64_t> buffer(chunkSize / 8);
     uint64_t x = 0x9E3779B97F4A7C15ull ^ bytes;
-    ULONGLONG left = bytes;
-    while (left)
+    ULONGLONG bytesLeft = bytes;
+    while (bytesLeft)
     {
-        DWORD n = static_cast<DWORD>(std::min<ULONGLONG>(chunk, left));
-        // for (auto &v : buf)
-        // { // xorshift64*
-        //     x ^= x << 13;
-        //     x ^= x >> 7;
-        //     x ^= x << 17;
-        //     v = x * 0x2545F4914F6CDD1Dull;
-        // }
-        for (auto &value : buf)
+        DWORD bytesToWrite = static_cast<DWORD>(std::min<ULONGLONG>(chunkSize, bytesLeft));
+        for (auto &value : buffer)
         {
             value = g_random();
         }
-        DWORD w = 0;
-        if (!WriteFile(uh.get(), buf.data(), n, &w, nullptr))
+        DWORD bytesWritten = 0;
+        if (!WriteFile(uniqueHandle.get(), buffer.data(), bytesToWrite, &bytesWritten, nullptr))
             ThrowWin(L"WriteFile (generate test file)", path);
-        if (w != n)
+        if (bytesWritten != bytesToWrite)
             throw AppError{L"WriteFile (generate test file): write less bytes than requested"};
-        left -= n;
+        bytesLeft -= bytesToWrite;
     }
 }
 
@@ -354,53 +347,53 @@ static void GenerateFile(const std::wstring &path, ULONGLONG bytes)
 //  Синхронное копирование: ReadFile -> WriteFile
 // ----------------------------------------------------------------------------
 
-static void CopySync(const std::wstring &src, const std::wstring &dst, DWORD block, bool nobuf)
+static void CopySync(const std::wstring &src, const std::wstring &dst, DWORD block, bool noBuffering)
 {
-    UniqueHandle hs = OpenSource(src, false, nobuf);
-    UniqueHandle hd = OpenDest(dst, false, nobuf);
-    VBuffer buf(static_cast<SIZE_T>(RoundUp(block, kAlign)));
+    UniqueHandle hSource = OpenSource(src, false, noBuffering);
+    UniqueHandle hDest = OpenDest(dst, false, noBuffering);
+    VBuffer buffer(static_cast<SIZE_T>(RoundUp(block, kAlign)));
 
     ULONGLONG total = 0;
     for (;;)
     {
-        DWORD got = 0;
-        if (!ReadFile(hs.get(), buf.data(), block, &got, nullptr))
+        DWORD bytesRead = 0;
+        if (!ReadFile(hSource.get(), buffer.data(), block, &bytesRead, nullptr))
             ThrowWin(L"ReadFile (sync read)", src);
-        if (got == 0)
+        if (bytesRead == 0)
             break;
 
-        DWORD wlen = got;
-        if (nobuf)
+        DWORD writeLength = bytesRead;
+        if (noBuffering)
         { // при NO_BUFFERING длина записи кратна сектору
-            wlen = static_cast<DWORD>(RoundUp(got, kAlign));
-            if (wlen > got)
-                std::memset(buf.data() + got, 0, wlen - got);
+            writeLength = static_cast<DWORD>(RoundUp(bytesRead, kAlign));
+            if (writeLength > bytesRead)
+                std::memset(buffer.data() + bytesRead, 0, writeLength - bytesRead);
         }
-        DWORD wr = 0;
-        if (!WriteFile(hd.get(), buf.data(), wlen, &wr, nullptr))
+        DWORD bytesWritten = 0;
+        if (!WriteFile(hDest.get(), buffer.data(), writeLength, &bytesWritten, nullptr))
             ThrowWin(L"WriteFile (sync write)", dst);
-        if (wr != wlen)
+        if (bytesWritten != writeLength)
             throw AppError{L"WriteFile (sync write): written less bytes than requested"};
-        total += got;
+        total += bytesRead;
     }
-    hs.close();
-    hd.close();
-    if (nobuf)
+    hSource.close();
+    hDest.close();
+    if (noBuffering)
         TruncateFile(dst, total);
 }
 
 // ----------------------------------------------------------------------------
 //  Асинхронное копирование: FILE_FLAG_OVERLAPPED, несколько операций одновременно
 //
-//  Есть ops «слотов». Каждый слот владеет своим буфером, событием и OVERLAPPED.
+//  Есть numOps «слотов». Каждый слот владеет своим буфером, событием и OVERLAPPED.
 //  Жизненный цикл слота:  чтение блока -> запись этого же блока -> следующий блок.
-//  Таким образом, одновременно «в полёте» находится до ops операций ввода-вывода.
+//  Таким образом, одновременно «в полёте» находится до numOps операций ввода-вывода.
 // ----------------------------------------------------------------------------
 
 namespace
 {
 
-    enum class St
+    enum class State
     {
         Idle,
         Reading,
@@ -410,162 +403,162 @@ namespace
 
     struct Slot
     {
-        OVERLAPPED ov{};
-        UniqueHandle ev; // событие завершения операции (manual-reset)
-        BYTE *buf = nullptr;
+        OVERLAPPED overlapped{};
+        UniqueHandle eventHandle; // событие завершения операции (manual-reset)
+        BYTE *buffer = nullptr;
         ULONGLONG offset = 0;
-        DWORD expected = 0; // сколько полезных байт ожидаем прочитать
-        DWORD wlen = 0;     // сколько байт пишем
-        St state = St::Idle;
+        DWORD expected = 0;       // сколько полезных байт ожидаем прочитать
+        DWORD writeLength = 0;    // сколько байт пишем
+        State state = State::Idle;
     };
 
 } // namespace
 
-static void CopyAsync(const std::wstring &src, const std::wstring &dst, ULONGLONG fileSize, DWORD block, int ops,
-                      bool nobuf)
+static void CopyAsync(const std::wstring &src, const std::wstring &dst, ULONGLONG fileSize, DWORD block, int numOps,
+                      bool noBuffering)
 {
-    UniqueHandle hs = OpenSource(src, true, nobuf);
-    UniqueHandle hd = OpenDest(dst, true, nobuf);
+    UniqueHandle hSource = OpenSource(src, true, noBuffering);
+    UniqueHandle hDest = OpenDest(dst, true, noBuffering);
 
     // Предварительное выделение размера: записи ложатся внутрь файла, а не
     // расширяют его (расширяющие записи Windows выполняет синхронно).
-    const ULONGLONG alloc = nobuf ? RoundUp(fileSize, kAlign) : fileSize;
-    if (alloc > 0)
+    const ULONGLONG allocSize = noBuffering ? RoundUp(fileSize, kAlign) : fileSize;
+    if (allocSize > 0)
     {
-        LARGE_INTEGER li;
-        li.QuadPart = static_cast<LONGLONG>(alloc);
-        if (!SetFilePointerEx(hd.get(), li, nullptr, FILE_BEGIN))
+        LARGE_INTEGER largeIntOffset;
+        largeIntOffset.QuadPart = static_cast<LONGLONG>(allocSize);
+        if (!SetFilePointerEx(hDest.get(), largeIntOffset, nullptr, FILE_BEGIN))
             ThrowWin(L"SetFilePointerEx (file enlargement)", dst);
-        if (!SetEndOfFile(hd.get()))
+        if (!SetEndOfFile(hDest.get()))
             ThrowWin(L"SetEndOfFile (file enlargement)", dst);
     }
 
     const SIZE_T stride = static_cast<SIZE_T>(RoundUp(block, kAlign));
-    VBuffer mem(stride * static_cast<SIZE_T>(ops));
-    std::vector<Slot> slots(static_cast<size_t>(ops));
-    std::vector<HANDLE> evs;
-    for (int i = 0; i < ops; ++i)
+    VBuffer memory(stride * static_cast<SIZE_T>(numOps));
+    std::vector<Slot> slots(static_cast<size_t>(numOps));
+    std::vector<HANDLE> eventHandles;
+    for (int i = 0; i < numOps; ++i)
     {
-        slots[i].ev.reset(CreateEventW(nullptr, TRUE, FALSE, nullptr));
-        if (!slots[i].ev.valid())
+        slots[i].eventHandle.reset(CreateEventW(nullptr, TRUE, FALSE, nullptr));
+        if (!slots[i].eventHandle.valid())
             ThrowWin(L"CreateEventW");
-        slots[i].buf = mem.data() + static_cast<size_t>(i) * stride;
-        evs.push_back(slots[i].ev.get());
+        slots[i].buffer = memory.data() + static_cast<size_t>(i) * stride;
+        eventHandles.push_back(slots[i].eventHandle.get());
     }
 
-    ULONGLONG next = 0; // смещение следующего непрочитанного блока
-    int active = 0;     // число слотов, ещё не закончивших работу
+    ULONGLONG nextOffset = 0; // смещение следующего непрочитанного блока
+    int activeSlots = 0;      // число слотов, ещё не закончивших работу
 
-    auto prepareOv = [](Slot &s, ULONGLONG off)
+    auto prepareOverlapped = [](Slot &slot, ULONGLONG offset)
     {
-        ResetEvent(s.ev.get());
-        ZeroMemory(&s.ov, sizeof(OVERLAPPED));
-        s.ov.hEvent = s.ev.get();
-        s.ov.Offset = static_cast<DWORD>(off & 0xFFFFFFFFull);
-        s.ov.OffsetHigh = static_cast<DWORD>(off >> 32);
+        ResetEvent(slot.eventHandle.get());
+        ZeroMemory(&slot.overlapped, sizeof(OVERLAPPED));
+        slot.overlapped.hEvent = slot.eventHandle.get();
+        slot.overlapped.Offset = static_cast<DWORD>(offset & 0xFFFFFFFFull);
+        slot.overlapped.OffsetHigh = static_cast<DWORD>(offset >> 32);
     };
 
-    auto startRead = [&](Slot &s)
+    auto startRead = [&](Slot &slot)
     {
-        s.offset = next;
-        next += block;
-        s.expected = static_cast<DWORD>(std::min<ULONGLONG>(block, fileSize - s.offset));
-        DWORD req = nobuf ? static_cast<DWORD>(RoundUp(s.expected, kAlign)) : s.expected;
-        prepareOv(s, s.offset);
-        if (!ReadFile(hs.get(), s.buf, req, nullptr, &s.ov))
+        slot.offset = nextOffset;
+        nextOffset += block;
+        slot.expected = static_cast<DWORD>(std::min<ULONGLONG>(block, fileSize - slot.offset));
+        DWORD requestSize = noBuffering ? static_cast<DWORD>(RoundUp(slot.expected, kAlign)) : slot.expected;
+        prepareOverlapped(slot, slot.offset);
+        if (!ReadFile(hSource.get(), slot.buffer, requestSize, nullptr, &slot.overlapped))
         {
             if (GetLastError() != ERROR_IO_PENDING)
                 ThrowWin(L"ReadFile (async read)", src);
         }
-        s.state = St::Reading;
+        slot.state = State::Reading;
     };
 
-    auto startWrite = [&](Slot &s, DWORD bytes)
+    auto startWrite = [&](Slot &slot, DWORD bytesToWrite)
     {
-        s.wlen = bytes;
-        if (nobuf)
+        slot.writeLength = bytesToWrite;
+        if (noBuffering)
         {
-            s.wlen = static_cast<DWORD>(RoundUp(bytes, kAlign));
-            if (s.wlen > bytes)
-                std::memset(s.buf + bytes, 0, s.wlen - bytes);
+            slot.writeLength = static_cast<DWORD>(RoundUp(bytesToWrite, kAlign));
+            if (slot.writeLength > bytesToWrite)
+                std::memset(slot.buffer + bytesToWrite, 0, slot.writeLength - bytesToWrite);
         }
-        prepareOv(s, s.offset);
-        if (!WriteFile(hd.get(), s.buf, s.wlen, nullptr, &s.ov))
+        prepareOverlapped(slot, slot.offset);
+        if (!WriteFile(hDest.get(), slot.buffer, slot.writeLength, nullptr, &slot.overlapped))
         {
             if (GetLastError() != ERROR_IO_PENDING)
                 ThrowWin(L"WriteFile (async write)", dst);
         }
-        s.state = St::Writing;
+        slot.state = State::Writing;
     };
 
     // При ошибке нельзя уничтожать буферы/OVERLAPPED, пока ядро ещё работает с ними.
     auto drain = [&]() noexcept
     {
-        for (auto &s : slots)
+        for (auto &slot : slots)
         {
-            if (s.state == St::Reading || s.state == St::Writing)
+            if (slot.state == State::Reading || slot.state == State::Writing)
             {
-                HANDLE h = (s.state == St::Reading) ? hs.get() : hd.get();
-                CancelIoEx(h, &s.ov);
-                DWORD d = 0;
-                GetOverlappedResult(h, &s.ov, &d, TRUE);
-                s.state = St::Idle;
+                HANDLE handle = (slot.state == State::Reading) ? hSource.get() : hDest.get();
+                CancelIoEx(handle, &slot.overlapped);
+                DWORD bytesTransferred = 0;
+                GetOverlappedResult(handle, &slot.overlapped, &bytesTransferred, TRUE);
+                slot.state = State::Idle;
             }
         }
     };
 
     try
     {
-        for (auto &s : slots)
+        for (auto &slot : slots)
         {
-            if (next < fileSize)
+            if (nextOffset < fileSize)
             {
-                startRead(s);
-                ++active;
+                startRead(slot);
+                ++activeSlots;
             }
         }
 
-        while (active > 0)
+        while (activeSlots > 0)
         {
-            DWORD w = WaitForMultipleObjects(static_cast<DWORD>(evs.size()), evs.data(), FALSE, INFINITE);
-            if (w == WAIT_FAILED)
+            DWORD waitResult = WaitForMultipleObjects(static_cast<DWORD>(eventHandles.size()), eventHandles.data(), FALSE, INFINITE);
+            if (waitResult == WAIT_FAILED)
                 ThrowWin(L"WaitForMultipleObjects");
-            if (w >= WAIT_OBJECT_0 + evs.size())
+            if (waitResult >= WAIT_OBJECT_0 + eventHandles.size())
                 throw AppError{L"WaitForMultipleObjects: unexpected return value"};
 
-            Slot &s = slots[w - WAIT_OBJECT_0];
-            const bool wasRead = (s.state == St::Reading);
-            HANDLE h = wasRead ? hs.get() : hd.get();
+            Slot &slot = slots[waitResult - WAIT_OBJECT_0];
+            const bool wasRead = (slot.state == State::Reading);
+            HANDLE handle = wasRead ? hSource.get() : hDest.get();
 
-            DWORD done = 0;
-            if (!GetOverlappedResult(h, &s.ov, &done, FALSE))
+            DWORD bytesTransferred = 0;
+            if (!GetOverlappedResult(handle, &slot.overlapped, &bytesTransferred, FALSE))
             {
-                DWORD e = GetLastError();
-                s.state = St::Idle;
+                DWORD errorCode = GetLastError();
+                slot.state = State::Idle;
                 ThrowWinCode(wasRead ? L"GetOverlappedResult (async read)" : L"GetOverlappedResult (async write)",
-                             wasRead ? src : dst, e);
+                             wasRead ? src : dst, errorCode);
             }
-            s.state = St::Idle;
+            slot.state = State::Idle;
 
             if (wasRead)
             {
-                if (done != s.expected)
+                if (bytesTransferred != slot.expected)
                     throw AppError{L"Async read: read unexpected number of bytes"};
-                startWrite(s, done);
+                startWrite(slot, bytesTransferred);
             }
             else
             {
-                if (done != s.wlen)
+                if (bytesTransferred != slot.writeLength)
                     throw AppError{L"Async write: written unexpected number of bytes"};
-                if (next < fileSize)
+                if (nextOffset < fileSize)
                 {
-                    startRead(s);
+                    startRead(slot);
                 }
                 else
                 {
-                    ResetEvent(s.ev.get());
-                    s.state = St::Done;
-                    --active;
+                    ResetEvent(slot.eventHandle.get());
+                    slot.state = State::Done;
+                    --activeSlots;
                 }
             }
         }
@@ -576,11 +569,11 @@ static void CopyAsync(const std::wstring &src, const std::wstring &dst, ULONGLON
         throw;
     }
 
-    hs.close();
-    hd.close();
-    if (nobuf)
+    hSource.close();
+    hDest.close();
+    if (noBuffering)
         TruncateFile(dst, fileSize);
-    // события и буферы освобождаются деструкторами (slots, mem)
+    // события и буферы освобождаются деструкторами (slots, memory)
 }
 
 // ----------------------------------------------------------------------------
@@ -595,7 +588,7 @@ struct Options
     int runs = 3;
     std::wstring src; // если задан — используем существующий файл
     std::wstring dir; // рабочий каталог для тестовых файлов
-    bool nobuf = false;
+    bool noBuffering = false;
     bool keep = false;
 };
 
@@ -622,29 +615,29 @@ static void PrintUsage()
 )";
 }
 
-static bool ParseList(const std::wstring &s, std::vector<ULONGLONG> &out)
+static bool ParseList(const std::wstring &listString, std::vector<ULONGLONG> &out)
 {
     out.clear();
     size_t pos = 0;
-    while (pos <= s.size())
+    while (pos <= listString.size())
     {
-        size_t c = s.find(L',', pos);
+        size_t c = listString.find(L',', pos);
         if (c == std::wstring::npos)
-            c = s.size();
-        std::wstring tok = s.substr(pos, c - pos);
-        if (tok.empty() || tok.size() > 12 || tok.find_first_not_of(L"0123456789") != std::wstring::npos)
+            c = listString.size();
+        std::wstring token = listString.substr(pos, c - pos);
+        if (token.empty() || token.size() > 12 || token.find_first_not_of(L"0123456789") != std::wstring::npos)
             return false;
-        ULONGLONG v = _wcstoui64(tok.c_str(), nullptr, 10);
-        if (v == 0)
+        ULONGLONG parsedValue = _wcstoui64(token.c_str(), nullptr, 10);
+        if (parsedValue == 0)
             return false;
-        out.push_back(v);
+        out.push_back(parsedValue);
         pos = c + 1;
     }
     return !out.empty();
 }
 
 // true — продолжать работу; false — выйти (code содержит код возврата)
-static bool ParseArgs(int argc, wchar_t **argv, Options &o, int &code)
+static bool ParseArgs(int argc, wchar_t **argv, Options &options, int &code)
 {
     code = 0;
     auto fail = [&](const std::wstring &msg)
@@ -655,77 +648,77 @@ static bool ParseArgs(int argc, wchar_t **argv, Options &o, int &code)
     };
     for (int i = 1; i < argc; ++i)
     {
-        std::wstring a = argv[i];
-        auto value = [&](std::wstring &v)
+        std::wstring arg = argv[i];
+        auto getValue = [&](std::wstring &val)
         {
             if (i + 1 >= argc)
                 return false;
-            v = argv[++i];
+            val = argv[++i];
             return true;
         };
-        std::wstring v;
-        if (a == L"-h" || a == L"--help" || a == L"/?" || a == L"-?")
+        std::wstring valStr;
+        if (arg == L"-h" || arg == L"--help" || arg == L"/?" || arg == L"-?")
         {
             PrintUsage();
             return false;
         }
-        else if (a == L"--nobuf")
+        else if (arg == L"--nobuf")
         {
-            o.nobuf = true;
+            options.noBuffering = true;
         }
-        else if (a == L"--keep")
+        else if (arg == L"--keep")
         {
-            o.keep = true;
+            options.keep = true;
         }
-        else if (a == L"--src")
+        else if (arg == L"--src")
         {
-            if (!value(o.src) || o.src.empty())
+            if (!getValue(options.src) || options.src.empty())
                 return fail(L"--src requires a file path");
         }
-        else if (a == L"--dir")
+        else if (arg == L"--dir")
         {
-            if (!value(o.dir) || o.dir.empty())
+            if (!getValue(options.dir) || options.dir.empty())
                 return fail(L"--dir requires a directory path");
         }
-        else if (a == L"--sizes")
+        else if (arg == L"--sizes")
         {
-            if (!value(v) || !ParseList(v, o.sizesMB))
+            if (!getValue(valStr) || !ParseList(valStr, options.sizesMB))
                 return fail(L"--sizes: required list of positive numbers (MB)");
         }
-        else if (a == L"--blocks")
+        else if (arg == L"--blocks")
         {
-            if (!value(v) || !ParseList(v, o.blocksKB))
+            if (!getValue(valStr) || !ParseList(valStr, options.blocksKB))
                 return fail(L"--blocks: expected list of positive numbers (KB)");
         }
-        else if (a == L"--ops")
+        else if (arg == L"--ops")
         {
-            if (!value(v) || !ParseList(v, o.ops))
+            if (!getValue(valStr) || !ParseList(valStr, options.ops))
                 return fail(L"--ops: expected list of positive numbers");
         }
-        else if (a == L"--runs")
+        else if (arg == L"--runs")
         {
             std::vector<ULONGLONG> t;
-            if (!value(v) || !ParseList(v, t) || t.size() != 1)
+            if (!getValue(valStr) || !ParseList(valStr, t) || t.size() != 1)
                 return fail(L"--runs: expected one positive number");
-            o.runs = static_cast<int>(std::min<ULONGLONG>(t[0], 1000));
+            options.runs = static_cast<int>(std::min<ULONGLONG>(t[0], 1000));
         }
         else
         {
-            return fail(L"unknown option " + a);
+            return fail(L"unknown option " + arg);
         }
     }
-    for (ULONGLONG n : o.ops)
+    for (ULONGLONG n : options.ops)
         if (n > 64)
             return fail(L"operations cannot exceed 64 (limit of WaitForMultipleObjects)");
-    for (ULONGLONG b : o.blocksKB)
+    for (ULONGLONG b : options.blocksKB)
     {
         if (b > 262144)
             return fail(L"block size cannot exceed 256 МБ (262144 КБ)");
-        if (o.nobuf && b % 4 != 0)
+        if (options.noBuffering && b % 4 != 0)
             return fail(L"with --nobuf block size must be a multiple of 4 KB");
     }
-    for (ULONGLONG s : o.sizesMB)
-        if (s > 4ull * 1024 * 1024)
+    for (ULONGLONG size : options.sizesMB)
+        if (size > 4ull * 1024 * 1024)
             return fail(L"file size in --sizes cannot exceed 4 GB (4096 МБ)");
     return true;
 }
@@ -734,18 +727,18 @@ static bool ParseArgs(int argc, wchar_t **argv, Options &o, int &code)
 //  Статистика и вывод
 // ----------------------------------------------------------------------------
 
-static double Median(std::vector<double> v)
+static double Median(std::vector<double> values)
 {
-    std::sort(v.begin(), v.end());
-    size_t n = v.size();
-    return n % 2 ? v[n / 2] : (v[n / 2 - 1] + v[n / 2]) / 2.0;
+    std::sort(values.begin(), values.end());
+    size_t n = values.size();
+    return n % 2 ? values[n / 2] : (values[n / 2 - 1] + values[n / 2]) / 2.0;
 }
-static double Mean(const std::vector<double> &v)
+static double Mean(const std::vector<double> &values)
 {
-    double s = 0;
-    for (double x : v)
-        s += x;
-    return s / static_cast<double>(v.size());
+    double sum = 0;
+    for (double x : values)
+        sum += x;
+    return sum / static_cast<double>(values.size());
 }
 
 struct Config
@@ -758,9 +751,9 @@ struct Config
 struct Row
 {
     Config cfg;
-    std::vector<double> t; // время каждого прогона, мс
-    bool sizeOk = true;
-    bool crcOk = true;
+    std::vector<double> times; // время каждого прогона, мс
+    bool isSizeOk = true;
+    bool isCrcOk = true;
 };
 
 static std::wstring JoinPath(const std::wstring &dir, const std::wstring &name)
@@ -770,20 +763,20 @@ static std::wstring JoinPath(const std::wstring &dir, const std::wstring &name)
     return dir + name;
 }
 
-static void CheckEnoughSpace(const std::wstring &dir, ULONGLONG need)
+static void CheckEnoughSpace(const std::wstring &dir, ULONGLONG needBytes)
 {
-    ULARGE_INTEGER avail{}, total{}, freeB{};
-    if (!GetDiskFreeSpaceExW(dir.c_str(), &avail, &total, &freeB))
+    ULARGE_INTEGER available{}, total{}, freeBytes{};
+    if (!GetDiskFreeSpaceExW(dir.c_str(), &available, &total, &freeBytes))
         ThrowWin(L"GetDiskFreeSpaceExW", dir);
-    if (avail.QuadPart < need)
+    if (available.QuadPart < needBytes)
     {
         std::wostringstream ss;
-        ss << L"Lack of disk space: need ~" << (need >> 20) << L" MB, available " << (avail.QuadPart >> 20) << L" MB";
+        ss << L"Lack of disk space: need ~" << (needBytes >> 20) << L" MB, available " << (available.QuadPart >> 20) << L" MB";
         throw AppError{ss.str()};
     }
 }
 
-static void BenchmarkFile(const Options &o, const std::wstring &srcPath, const std::wstring &dstPath)
+static void BenchmarkFile(const Options &options, const std::wstring &srcPath, const std::wstring &dstPath)
 {
     const ULONGLONG size = GetFileSizeByPath(srcPath);
 
@@ -791,159 +784,158 @@ static void BenchmarkFile(const Options &o, const std::wstring &srcPath, const s
                << L" Source: " << srcPath << L"\n Size  : " << size << L" bytes (" << std::fixed << std::setprecision(2)
                << static_cast<double>(size) / 1048576.0 << L" MB)\n"
                << L" Calculating CRC32 of the source... " << std::flush;
-    ULONGLONG crcBytes = 0;
-    const uint32_t crcSrc = Crc32File(srcPath, crcBytes);
-    if (crcBytes != size)
+    ULONGLONG crcBytesTotal = 0;
+    const uint32_t crcSrc = Crc32File(srcPath, crcBytesTotal);
+    if (crcBytesTotal != size)
         throw AppError{L"Size read while calculating CRC32 does not match file size"};
     std::wcout << Hex32(crcSrc) << L"\n";
 
-    for (ULONGLONG bkb : o.blocksKB)
+    for (ULONGLONG blockSizeKB : options.blocksKB)
     {
-        const DWORD block = static_cast<DWORD>(bkb * 1024);
+        const DWORD blockSize = static_cast<DWORD>(blockSizeKB * 1024);
 
         std::vector<Row> rows;
         rows.push_back(Row{Config{L"Sync", false, 0}, {}, true, true});
-        for (ULONGLONG n : o.ops)
+        for (ULONGLONG n : options.ops)
         {
-            std::wstring lbl = L"Async x" + std::to_wstring(n);
-            rows.push_back(Row{Config{lbl, true, static_cast<int>(n)}, {}, true, true});
+            std::wstring labelStr = L"Async x" + std::to_wstring(n);
+            rows.push_back(Row{Config{labelStr, true, static_cast<int>(n)}, {}, true, true});
         }
 
         // Прогоны чередуются по режимам, чтобы влияние кэша ОС распределялось равномерно.
-        for (int run = 1; run <= o.runs; ++run)
+        for (int run = 1; run <= options.runs; ++run)
         {
-            for (auto &r : rows)
+            for (auto &row : rows)
             {
-                std::wcout << L"\r  block " << bkb << L" KB, run " << run << L"/" << o.runs << L": " << std::left
-                           << std::setw(14) << r.cfg.label << L" ...                    " << std::flush;
+                std::wcout << L"\r  block " << blockSizeKB << L" KB, run " << run << L"/" << options.runs << L": " << std::left
+                           << std::setw(14) << row.cfg.label << L" ...                    " << std::flush;
 
                 DeleteIfExists(dstPath);
                 FileCleaner cleaner{dstPath};
 
-                double t0 = NowMs();
-                if (r.cfg.async)
-                    CopyAsync(srcPath, dstPath, size, block, r.cfg.ops, o.nobuf);
+                double startTime = NowMs();
+                if (row.cfg.async)
+                    CopyAsync(srcPath, dstPath, size, blockSize, row.cfg.ops, options.noBuffering);
                 else
-                    CopySync(srcPath, dstPath, block, o.nobuf);
-                double ms = NowMs() - t0;
+                    CopySync(srcPath, dstPath, blockSize, options.noBuffering);
+                double elapsedMs = NowMs() - startTime;
 
                 // Проверки (вне замера времени)
-                const ULONGLONG dsize = GetFileSizeByPath(dstPath);
-                ULONGLONG cb = 0;
-                const uint32_t crcDst = Crc32File(dstPath, cb);
-                const bool sOk = (dsize == size);
-                const bool cOk = (crcDst == crcSrc) && (cb == size);
-                r.sizeOk = r.sizeOk && sOk;
-                r.crcOk = r.crcOk && cOk;
-                r.t.push_back(ms);
+                const ULONGLONG destSize = GetFileSizeByPath(dstPath);
+                ULONGLONG crcBytesDst = 0;
+                const uint32_t crcDst = Crc32File(dstPath, crcBytesDst);
+                const bool isSizeOk = (destSize == size);
+                const bool isCrcOk = (crcDst == crcSrc) && (crcBytesDst == size);
+                row.isSizeOk = row.isSizeOk && isSizeOk;
+                row.isCrcOk = row.isCrcOk && isCrcOk;
+                row.times.push_back(elapsedMs);
             }
         }
         std::wcout << L"\r" << std::wstring(78, L' ') << L"\r";
 
         // ---- Таблица ----
-        const double syncMed = Median(rows[0].t);
+        const double syncMed = Median(rows[0].times);
         const double mb = static_cast<double>(size) / 1048576.0;
-        std::wcout << L"\n Block " << bkb << L" KB, runs: " << o.runs << L", mode: "
-                   << (o.nobuf ? L"without OS cache (NO_BUFFERING)" : L"with OS cache") << L"\n";
+        std::wcout << L"\n Block " << blockSizeKB << L" KB, runs: " << options.runs << L", mode: "
+                   << (options.noBuffering ? L"without OS cache (NO_BUFFERING)" : L"with OS cache") << L"\n";
         std::wcout << std::left << std::setw(15) << L" Mode" << std::right << std::setw(12) << L"Median,ms" << std::setw(12)
                    << L"Mean,ms" << std::setw(10) << L"Min,ms" << std::setw(10) << L"Max,ms" << std::setw(9) << L"MB/s"
                    << std::setw(11) << L"Speedup" << std::setw(8) << L"Size" << std::setw(8) << L"CRC32" << L"\n"
                    << L" " << std::wstring(94, L'-') << L"\n";
-        size_t best = 0;
+        size_t bestIndex = 0;
         for (size_t i = 0; i < rows.size(); ++i)
         {
-            const Row &r = rows[i];
-            double med = Median(r.t);
-            if (med < Median(rows[best].t))
-                best = i;
-            double mn = *std::min_element(r.t.begin(), r.t.end());
-            double mx = *std::max_element(r.t.begin(), r.t.end());
-            double mbps = med > 0 ? mb / (med / 1000.0) : 0;
-            std::wcout << L" " << std::left << std::setw(14) << r.cfg.label << std::right << std::fixed << std::setprecision(1)
-                       << std::setw(12) << med << std::setw(12) << Mean(r.t) << std::setw(10) << mn << std::setw(10) << mx
-                       << std::setw(9) << mbps << std::setprecision(2) << std::setw(10) << (med > 0 ? syncMed / med : 0.0)
-                       << L"x" << std::setw(8) << (r.sizeOk ? L"OK" : L"ERROR") << std::setw(8)
-                       << (r.crcOk ? L"OK" : L"ERROR") << L"\n";
+            const Row &row = rows[i];
+            double medianTime = Median(row.times);
+            if (medianTime < Median(rows[bestIndex].times))
+                bestIndex = i;
+            double minTime = *std::min_element(row.times.begin(), row.times.end());
+            double maxTime = *std::max_element(row.times.begin(), row.times.end());
+            double speedMBps = medianTime > 0 ? mb / (medianTime / 1000.0) : 0;
+            std::wcout << L" " << std::left << std::setw(14) << row.cfg.label << std::right << std::fixed << std::setprecision(1)
+                       << std::setw(12) << medianTime << std::setw(12) << Mean(row.times) << std::setw(10) << minTime << std::setw(10) << maxTime
+                       << std::setw(9) << speedMBps << std::setprecision(2) << std::setw(10) << (medianTime > 0 ? syncMed / medianTime : 0.0)
+                       << L"x" << std::setw(8) << (row.isSizeOk ? L"OK" : L"ERROR") << std::setw(8)
+                       << (row.isCrcOk ? L"OK" : L"ERROR") << L"\n";
         }
-        std::wcout << L" Fastest of all (by median): " << rows[best].cfg.label << L"\n";
-        for (const auto &r : rows)
-            if (!r.sizeOk || !r.crcOk)
-                std::wcout << L" WARNING: mode «" << r.cfg.label << L"» produced an incorrect copy!\n";
+        std::wcout << L" Fastest of all (by median): " << rows[bestIndex].cfg.label << L"\n";
+        for (const auto &row : rows)
+            if (!row.isSizeOk || !row.isCrcOk)
+                std::wcout << L" WARNING: mode «" << row.cfg.label << L"» produced an incorrect copy!\n";
     }
 }
-
 
 // ----------------------------------------------------------------------------
 //  Основная логика
 // ----------------------------------------------------------------------------
 
-static int Run(const Options &o)
+static int Run(const Options &options)
 {
     // Рабочий каталог
-    std::wstring dir = o.dir;
-    if (dir.empty())
+    std::wstring directory = options.dir;
+    if (directory.empty())
     {
-        wchar_t tmp[MAX_PATH + 2];
-        DWORD n = GetTempPathW(MAX_PATH + 1, tmp);
-        if (n == 0 || n > MAX_PATH)
+        wchar_t tempPath[MAX_PATH + 2];
+        DWORD pathLength = GetTempPathW(MAX_PATH + 1, tempPath);
+        if (pathLength == 0 || pathLength > MAX_PATH)
             ThrowWin(L"GetTempPathW");
-        dir.assign(tmp, n);
+        directory.assign(tempPath, pathLength);
     }
-    DWORD attr = GetFileAttributesW(dir.c_str());
-    if (attr == INVALID_FILE_ATTRIBUTES)
-        ThrowWin(L"GetFileAttributesW (working directory)", dir);
-    if (!(attr & FILE_ATTRIBUTE_DIRECTORY))
-        throw AppError{L"--dir: specified path is not a directory: " + dir};
+    DWORD fileAttr = GetFileAttributesW(directory.c_str());
+    if (fileAttr == INVALID_FILE_ATTRIBUTES)
+        ThrowWin(L"GetFileAttributesW (working directory)", directory);
+    if (!(fileAttr & FILE_ATTRIBUTE_DIRECTORY))
+        throw AppError{L"--dir: specified path is not a directory: " + directory};
 
-    const std::wstring pid = std::to_wstring(GetCurrentProcessId());
-    const std::wstring dstPath = JoinPath(dir, L"asynccopy_" + pid + L"_dst.bin");
+    const std::wstring pidStr = std::to_wstring(GetCurrentProcessId());
+    const std::wstring dstPath = JoinPath(directory, L"asynccopy_" + pidStr + L"_dst.bin");
 
     std::wcout << L"Async copy (WinAPI, FILE_FLAG_OVERLAPPED)\n"
-               << L"Working directory: " << dir << L"\n"
+               << L"Working directory: " << directory << L"\n"
                << L"Blocks, KB: ";
-    for (auto b : o.blocksKB)
+    for (auto b : options.blocksKB)
         std::wcout << b << L" ";
     std::wcout << L"| async operations: ";
-    for (auto n : o.ops)
+    for (auto n : options.ops)
         std::wcout << n << L" ";
-    std::wcout << L"| runs: " << o.runs << L"\n";
+    std::wcout << L"| runs: " << options.runs << L"\n";
 
-    if (!o.src.empty())
+    if (!options.src.empty())
     {
         // ---- Пользовательский входной файл (только чтение) ----
-        DWORD a = GetFileAttributesW(o.src.c_str());
-        if (a == INVALID_FILE_ATTRIBUTES)
-            ThrowWin(L"GetFileAttributesW (source file)", o.src);
-        if (a & FILE_ATTRIBUTE_DIRECTORY)
-            throw AppError{L"--src: source is a directory, not a file: " + o.src};
-        if (_wcsicmp(o.src.c_str(), dstPath.c_str()) == 0)
+        DWORD attr = GetFileAttributesW(options.src.c_str());
+        if (attr == INVALID_FILE_ATTRIBUTES)
+            ThrowWin(L"GetFileAttributesW (source file)", options.src);
+        if (attr & FILE_ATTRIBUTE_DIRECTORY)
+            throw AppError{L"--src: source is a directory, not a file: " + options.src};
+        if (_wcsicmp(options.src.c_str(), dstPath.c_str()) == 0)
             throw AppError{L"Input and output files are the same"};
-        CheckEnoughSpace(dir, GetFileSizeByPath(o.src) + (64ull << 20));
-        BenchmarkFile(o, o.src, dstPath);
+        CheckEnoughSpace(directory, GetFileSizeByPath(options.src) + (64ull << 20));
+        BenchmarkFile(options, options.src, dstPath);
     }
     else
     {
         // ---- Генерируемые тестовые файлы ----
-        for (ULONGLONG mb : o.sizesMB)
+        for (ULONGLONG sizeMB : options.sizesMB)
         {
-            const ULONGLONG bytes = mb << 20;
-            const std::wstring srcPath = JoinPath(dir, L"asynccopy_" + pid + L"_src_" + std::to_wstring(mb) + L"MB.bin");
+            const ULONGLONG bytes = sizeMB << 20;
+            const std::wstring srcPath = JoinPath(directory, L"asynccopy_" + pidStr + L"_src_" + std::to_wstring(sizeMB) + L"MB.bin");
             try
             {
-                CheckEnoughSpace(dir, bytes * 2 + (64ull << 20));
+                CheckEnoughSpace(directory, bytes * 2 + (64ull << 20));
             }
-            catch (const AppError &e)
+            catch (const AppError &error)
             {
-                std::wcout << L"\nFile " << mb << L" MB skipped.\n"
-                           << e.message << L"\n";
+                std::wcout << L"\nFile " << sizeMB << L" MB skipped.\n"
+                           << error.message << L"\n";
                 continue;
             }
-            std::wcout << L"\nGenerating test file " << mb << L" MB... " << std::flush;
-            FileCleaner cleaner{o.keep ? std::wstring() : srcPath};
+            std::wcout << L"\nGenerating test file " << sizeMB << L" MB... " << std::flush;
+            FileCleaner cleaner{options.keep ? std::wstring() : srcPath};
             GenerateFile(srcPath, bytes);
             std::wcout << L"done\n";
-            BenchmarkFile(o, srcPath, dstPath);
-            if (o.keep)
+            BenchmarkFile(options, srcPath, dstPath);
+            if (options.keep)
                 std::wcout << L" Source file saved: " << srcPath << L"\n";
         }
     }
@@ -966,33 +958,33 @@ int wmain(int argc, wchar_t **argv)
     _setmode(_fileno(stdout), _O_U16TEXT);
     _setmode(_fileno(stderr), _O_U16TEXT);
 
-    LARGE_INTEGER f;
-    if (!QueryPerformanceFrequency(&f) || f.QuadPart == 0)
+    LARGE_INTEGER freq;
+    if (!QueryPerformanceFrequency(&freq) || freq.QuadPart == 0)
     {
-        std::wcerr << L"QueryPerformanceFrequency недоступен\n";
+        std::wcerr << L"QueryPerformanceFrequency failed\n";
         return 1;
     }
-    g_qpcFreq = static_cast<double>(f.QuadPart);
+    g_qpcFreq = static_cast<double>(freq.QuadPart);
     InitCrcTables();
 
-    Options o;
+    Options options;
     int code = 0;
-    if (!ParseArgs(argc, argv, o, code))
+    if (!ParseArgs(argc, argv, options, code))
         return code;
 
     try
     {
-        return Run(o);
+        return Run(options);
     }
-    catch (const AppError &e)
+    catch (const AppError &error)
     {
         std::wcerr << L"\n"
-                   << e.message << L"\n";
+                   << error.message << L"\n";
         return 1;
     }
-    catch (const std::exception &e)
+    catch (const std::exception &exception)
     {
-        std::wcerr << L"\nException: " << e.what() << L"\n";
+        std::wcerr << L"\nException: " << exception.what() << L"\n";
         return 1;
     }
 }
