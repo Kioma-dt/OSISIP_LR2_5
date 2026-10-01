@@ -294,7 +294,7 @@ static uint32_t Crc32File(const std::wstring &path, ULONGLONG &totalBytes)
     HANDLE h = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING,
                            FILE_ATTRIBUTE_NORMAL | FILE_FLAG_SEQUENTIAL_SCAN, nullptr);
     if (h == INVALID_HANDLE_VALUE)
-        ThrowWin(L"CreateFileW (расчёт CRC32)", path);
+        ThrowWin(L"CreateFileW (calc CRC32)", path);
     UniqueHandle uh(h);
     std::vector<uint8_t> buf(1u << 20);
     uint32_t crc = 0xFFFFFFFFu;
@@ -303,7 +303,7 @@ static uint32_t Crc32File(const std::wstring &path, ULONGLONG &totalBytes)
     {
         DWORD got = 0;
         if (!ReadFile(uh.get(), buf.data(), static_cast<DWORD>(buf.size()), &got, nullptr))
-            ThrowWin(L"ReadFile (расчёт CRC32)", path);
+            ThrowWin(L"ReadFile (calc CRC32)", path);
         if (got == 0)
             break;
         crc = Crc32Update(crc, buf.data(), got);
@@ -595,7 +595,6 @@ struct Options
     int runs = 3;
     std::wstring src; // если задан — используем существующий файл
     std::wstring dir; // рабочий каталог для тестовых файлов
-    std::wstring csv; // файл для экспорта результатов
     bool nobuf = false;
     bool keep = false;
 };
@@ -613,7 +612,6 @@ static void PrintUsage()
   --dir <каталог>   каталог для тестовых файлов                      [%TEMP%]
   --nobuf           FILE_FLAG_NO_BUFFERING (обход файлового кэша ОС;
                     блок должен быть кратен 4 КБ)
-  --csv <файл>      сохранить результаты всех прогонов в CSV
   --keep            не удалять сгенерированный исходный файл
   -h, --help        эта справка
 
@@ -689,11 +687,6 @@ static bool ParseArgs(int argc, wchar_t **argv, Options &o, int &code)
             if (!value(o.dir) || o.dir.empty())
                 return fail(L"--dir requires a directory path");
         }
-        else if (a == L"--csv")
-        {
-            if (!value(o.csv) || o.csv.empty())
-                return fail(L"--csv requires a file path");
-        }
         else if (a == L"--sizes")
         {
             if (!value(v) || !ParseList(v, o.sizesMB))
@@ -758,7 +751,6 @@ static double Mean(const std::vector<double> &v)
 struct Config
 {
     std::wstring label;
-    std::string csvName;
     bool async;
     int ops;
 };
@@ -791,8 +783,7 @@ static void CheckEnoughSpace(const std::wstring &dir, ULONGLONG need)
     }
 }
 
-static void BenchmarkFile(const Options &o, const std::wstring &srcPath, const std::wstring &dstPath,
-                          std::string &csv)
+static void BenchmarkFile(const Options &o, const std::wstring &srcPath, const std::wstring &dstPath)
 {
     const ULONGLONG size = GetFileSizeByPath(srcPath);
 
@@ -811,11 +802,11 @@ static void BenchmarkFile(const Options &o, const std::wstring &srcPath, const s
         const DWORD block = static_cast<DWORD>(bkb * 1024);
 
         std::vector<Row> rows;
-        rows.push_back(Row{Config{L"Sync", "sync", false, 0}, {}, true, true});
+        rows.push_back(Row{Config{L"Sync", false, 0}, {}, true, true});
         for (ULONGLONG n : o.ops)
         {
             std::wstring lbl = L"Async x" + std::to_wstring(n);
-            rows.push_back(Row{Config{lbl, "async", true, static_cast<int>(n)}, {}, true, true});
+            rows.push_back(Row{Config{lbl, true, static_cast<int>(n)}, {}, true, true});
         }
 
         // Прогоны чередуются по режимам, чтобы влияние кэша ОС распределялось равномерно.
@@ -845,10 +836,6 @@ static void BenchmarkFile(const Options &o, const std::wstring &srcPath, const s
                 r.sizeOk = r.sizeOk && sOk;
                 r.crcOk = r.crcOk && cOk;
                 r.t.push_back(ms);
-
-                csv += std::to_string(size) + "," + std::to_string(bkb) + "," + r.cfg.csvName + "," +
-                       std::to_string(r.cfg.ops) + "," + std::to_string(run) + "," + std::to_string(ms) + "," +
-                       (sOk ? "1" : "0") + "," + (cOk ? "1" : "0") + "\n";
             }
         }
         std::wcout << L"\r" << std::wstring(78, L' ') << L"\r";
@@ -885,21 +872,6 @@ static void BenchmarkFile(const Options &o, const std::wstring &srcPath, const s
     }
 }
 
-static void WriteTextFile(const std::wstring &path, const std::string &text)
-{
-    HANDLE h = CreateFileW(path.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
-    if (h == INVALID_HANDLE_VALUE)
-        ThrowWin(L"CreateFileW (CSV)", path);
-    UniqueHandle uh(h);
-    size_t off = 0;
-    while (off < text.size())
-    {
-        DWORD n = static_cast<DWORD>(std::min<size_t>(text.size() - off, 1u << 20)), w = 0;
-        if (!WriteFile(uh.get(), text.data() + off, n, &w, nullptr))
-            ThrowWin(L"WriteFile (CSV)", path);
-        off += w;
-    }
-}
 
 // ----------------------------------------------------------------------------
 //  Основная логика
@@ -936,8 +908,6 @@ static int Run(const Options &o)
         std::wcout << n << L" ";
     std::wcout << L"| runs: " << o.runs << L"\n";
 
-    std::string csv = "size_bytes,block_kb,mode,ops,run,time_ms,size_ok,crc_ok\n";
-
     if (!o.src.empty())
     {
         // ---- Пользовательский входной файл (только чтение) ----
@@ -949,7 +919,7 @@ static int Run(const Options &o)
         if (_wcsicmp(o.src.c_str(), dstPath.c_str()) == 0)
             throw AppError{L"Input and output files are the same"};
         CheckEnoughSpace(dir, GetFileSizeByPath(o.src) + (64ull << 20));
-        BenchmarkFile(o, o.src, dstPath, csv);
+        BenchmarkFile(o, o.src, dstPath);
     }
     else
     {
@@ -972,16 +942,10 @@ static int Run(const Options &o)
             FileCleaner cleaner{o.keep ? std::wstring() : srcPath};
             GenerateFile(srcPath, bytes);
             std::wcout << L"done\n";
-            BenchmarkFile(o, srcPath, dstPath, csv);
+            BenchmarkFile(o, srcPath, dstPath);
             if (o.keep)
                 std::wcout << L" Source file saved: " << srcPath << L"\n";
         }
-    }
-
-    if (!o.csv.empty())
-    {
-        WriteTextFile(o.csv, csv);
-        std::wcout << L"\nResults saved to " << o.csv << L"\n";
     }
 
     std::wcout << LR"(
