@@ -111,7 +111,7 @@ void BenchmarkFile(const Options &options, const std::wstring &srcPath, const st
                 if (row.async)
                     CopyAsync(srcPath, dstPath, size, block, row.ops, options.noBuffering);
                 else
-                    CopySync(srcPath, dstPath, block, options.noBuffering);
+                    CopySync(srcPath, dstPath, size, block, options.noBuffering);
                 row.times.push_back(NowMs() - start);
                 ULONGLONG destinationSize = GetFileSizeByPath(dstPath);
                 ULONGLONG destinationBytes = 0;
@@ -120,7 +120,7 @@ void BenchmarkFile(const Options &options, const std::wstring &srcPath, const st
                 row.crcOk = row.crcOk && destinationCrc == sourceCrc && destinationBytes == size;
             }
         std::wcout << L"\r" << std::wstring(78, L' ') << L"\r\n Block " << blockKB << L" KB, runs: " << options.runs << L"\n";
-        double syncMedian = Median(rows[0].times);
+        double syncMean = Mean(rows[0].times);
         size_t best = 0;
         std::wcout << std::left << std::setw(15) << L" Mode" << std::right << std::setw(12) << L"Median,ms" << std::setw(12) << L"Mean,ms"
                    << std::setw(10) << L"Min,ms" << std::setw(10) << L"Max,ms" << std::setw(9) << L"MB/s" << std::setw(11) << L"Speedup"
@@ -128,17 +128,17 @@ void BenchmarkFile(const Options &options, const std::wstring &srcPath, const st
         for (size_t i = 0; i < rows.size(); ++i)
         {
             Row &row = rows[i];
-            double median = Median(row.times);
-            if (median < Median(rows[best].times))
+            double mean = Mean(row.times);
+            if (mean < Mean(rows[best].times))
                 best = i;
-            double speed = median > 0 ? (static_cast<double>(size) / 1048576.0) / (median / 1000.0) : 0;
+            double speed = mean > 0 ? (static_cast<double>(size) / 1048576.0) / (mean / 1000.0) : 0;
             std::wcout << L" " << std::left << std::setw(14) << row.label << std::right << std::fixed << std::setprecision(1)
-                       << std::setw(12) << median << std::setw(12) << Mean(row.times) << std::setw(10) << *std::min_element(row.times.begin(), row.times.end())
+                       << std::setw(12) << Median(row.times) << std::setw(12) << Mean(row.times) << std::setw(10) << *std::min_element(row.times.begin(), row.times.end())
                        << std::setw(10) << *std::max_element(row.times.begin(), row.times.end()) << std::setw(9) << speed << std::setprecision(2)
-                       << std::setw(10) << (median > 0 ? syncMedian / median : 0.0) << L"x" << std::setw(8) << (row.sizeOk ? L"OK" : L"ERROR")
+                       << std::setw(10) << (mean > 0 ? syncMean / mean : 0.0) << L"x" << std::setw(8) << (row.sizeOk ? L"OK" : L"ERROR")
                        << std::setw(8) << (row.crcOk ? L"OK" : L"ERROR") << L"\n";
         }
-        std::wcout << L" Fastest of all (by median): " << rows[best].label << L"\n";
+        std::wcout << L" Fastest of all (by mean): " << rows[best].label << L"\n";
     }
 }
 

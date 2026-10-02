@@ -28,10 +28,26 @@ namespace
     };
 }
 
-void CopySync(const std::wstring &src, const std::wstring &dst, DWORD block, bool noBuffering)
+void CopySync(const std::wstring &src, const std::wstring &dst, ULONGLONG fileSize, DWORD block, bool noBuffering)
 {
     UniqueHandle source = OpenSource(src, false, noBuffering);
     UniqueHandle destination = OpenDest(dst, false, noBuffering);
+
+    ULONGLONG allocatedSize = noBuffering ? RoundUp(fileSize, kAlign) : fileSize;
+    if (allocatedSize)
+    {
+        LARGE_INTEGER offset;
+        offset.QuadPart = static_cast<LONGLONG>(allocatedSize);
+        if (!SetFilePointerEx(destination.get(), offset, nullptr, FILE_BEGIN))
+            ThrowWin(L"SetFilePointerEx (file enlargement)", dst);
+        if (!SetEndOfFile(destination.get()))
+            ThrowWin(L"SetEndOfFile (file enlargement)", dst);
+
+        offset.QuadPart = 0;
+        if (!SetFilePointerEx(destination.get(), offset, nullptr, FILE_BEGIN))
+            ThrowWin(L"SetFilePointerEx (positioning)", dst);
+    }
+
     VBuffer buffer(static_cast<SIZE_T>(RoundUp(block, kAlign)));
     ULONGLONG total = 0;
     for (;;)

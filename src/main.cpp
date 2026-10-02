@@ -10,6 +10,8 @@
 #include <io.h>
 #include <iostream>
 
+//?g++ -O2 -std=c++17 -municode -static src/*  -IInclude -o asynccopy.exe
+
 int wmain(int argc, wchar_t **argv)
 {
     _setmode(_fileno(stdout), _O_U16TEXT);
